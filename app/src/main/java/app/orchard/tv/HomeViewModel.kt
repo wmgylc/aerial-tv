@@ -34,6 +34,7 @@ import app.orchard.tv.system.SourceKind
 import app.orchard.tv.system.SystemProbe
 import app.orchard.tv.system.TvSource
 import app.orchard.tv.system.VolumeStatus
+import app.orchard.tv.ui.home.HOME_GRID_COLUMNS
 import app.orchard.tv.ui.home.PinMode
 import app.orchard.tv.ui.home.ScreensaverSkips
 import app.orchard.tv.ui.home.TileFaces
@@ -60,11 +61,9 @@ sealed interface Overlay {
 
 enum class CcPage { Main, Inputs, InputSettings, Update, Setup }
 
-/**
- * Tiles a cold start reads whole before showing Home (two rows and a half, as many as can show);
- * see AppCatalog.load.
- */
-private const val LEADING_TILES = 13
+/** The number of tile artworks needed for the first viewport under the current Home layout. */
+private fun coldStartTileCount(): Int = HOME_GRID_COLUMNS *
+    (if (AerialSettings.oneRowHome && !AerialSettings.peekNextRow) 1 else 2)
 
 /** Time since boot at which the app list is looked at again; see HomeViewModel.catchUpAfterBoot. */
 private val BOOT_CATCH_UP_MS = listOf(60_000L, 180_000L)
@@ -166,11 +165,15 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
     /**
      * Apps installed or removed while Aerial was in the background (from an app store in front)
      * send no broadcast Aerial hears: it listens only while started. Catch up when Home comes back
-     * (issue #55). Before Android 8 there is no change counter; the reload is cheap, tiles are cached.
+     * (issue #55). Before Android 8 there is no change counter; reload once on return unless the
+     * first load is still running (the package receiver is registered before this check).
      */
     fun reloadIfPackagesChanged() {
-        if (!loaded) return
-        if (Build.VERSION.SDK_INT >= 26 && context.packageManager.getChangedPackages(packagesSeen) == null) return
+        if (Build.VERSION.SDK_INT >= 26) {
+            if (context.packageManager.getChangedPackages(packagesSeen) == null) return
+        } else if (!loaded && loadJob?.isActive == true) {
+            return
+        }
         reload()
     }
 
@@ -185,8 +188,11 @@ class HomeViewModel(app: Application) : AndroidViewModel(app) {
             // The inputs are probed while the apps load: one after the other, a cold start waited
             // for both in turn (0.1-0.8 s more on the TVs in issues #452, #454, #537).
             val probing = async(Dispatchers.Default) { SystemProbe.sources(ctx) }
-            // A cold start reads only the first rows' tiles whole; the rest follow just after.
-            val first: ((Set<String>) -> Set<String>)? = if (loaded) null else { installed -> store.leading(LEADING_TILES, installed) }
+            // Read the tiles visible without scrolling first. In one-row mode, include the peeking
+            // second row when enabled; defer only tiles fully below the first viewport.
+            val first: ((Set<String>) -> Set<String>)? = if (loaded) null else { installed ->
+                store.leading(coldStartTileCount(), installed)
+            }
             all = AppCatalog.load(ctx, first)
             // Where it went: waiting for a thread, the package queries, the tiles, then waiting for
             // the main thread (busy with Home's first frames on a cold start).

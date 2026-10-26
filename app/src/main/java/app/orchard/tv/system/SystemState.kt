@@ -422,6 +422,7 @@ object SystemProbe {
      * generic passthrough intent has no handler (Xiaomi's China firmware).
      */
     fun sources(context: Context): List<TvSource> = frameworkSources(context)
+        .ifEmpty { XgimiMstarSources.load(context) }
         .ifEmpty { xiaomiSources(context) }
         .ifEmpty { KonkaSources.load(context) }
         .ifEmpty { tclSources(context) }

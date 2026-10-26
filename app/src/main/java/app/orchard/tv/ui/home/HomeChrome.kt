@@ -315,8 +315,8 @@ private fun Plate(glass: ImageBitmap?, film: ImageBitmap?, plate: Rect?, scroll:
         swap.animateTo(1f, tween(450, easing = Motion.EaseOut))
         under = null
     }
-    val top = remember(shown) { shown?.let { PlateLayer(plateTinted(it)) } }
-    val bottom = remember(under) { under?.let { PlateLayer(plateTinted(it)) } }
+    val top = remember(shown) { shown?.let { PlateLayer(it) } }
+    val bottom = remember(under) { under?.let { PlateLayer(it) } }
 
     // Each new frame is baked off the main thread: baked while drawing, as the still plate's glass
     // is, it held up a frame every few seconds (Xiaomi MiTV-MFTR0: frames of 50-70 ms).
@@ -401,15 +401,60 @@ private fun Plate(glass: ImageBitmap?, film: ImageBitmap?, plate: Rect?, scroll:
  * MiTV-ASTP0, Android 9, Mali-G31, issue #183; a HuiQu projector, #181) and drawn apart they cost
  * 3 ms more a frame than the plain rounded plate. Baked while drawing, for one screen and place.
  */
-private class PlateLayer(private val src: ImageBitmap) {
+private class PlateLayer(private val glass: ImageBitmap) {
     private var baked: Pair<Pair<Size, Rect>, ImageBitmap>? = null
 
     fun draw(scope: androidx.compose.ui.graphics.drawscope.DrawScope, plate: Rect, at: Rect, alpha: Float) = with(scope) {
-        val image = baked?.takeIf { it.first == size to plate }?.second
-            ?: bakePlate(src, size, plate, PlateCorner.toPx(), 1.2.dp.toPx()).also { baked = (size to plate) to it }
+        val image = baked?.takeIf { it.first == size to plate }?.second ?:
+            HomePlateBakes.image(glass, size, plate, PlateCorner.toPx(), 1.2.dp.toPx()).also {
+                baked = (size to plate) to it
+            }
         drawBaked(image, at, alpha)
     }
 }
+
+/** One prepared plate is enough for Home. Its bitmap is shared with the drawing layer. */
+private object HomePlateBakes {
+    private data class Entry(
+        val source: ImageBitmap,
+        val screen: Size,
+        val plate: Rect,
+        val radius: Float,
+        val rim: Float,
+        val image: ImageBitmap,
+    )
+
+    @Volatile private var entry: Entry? = null
+
+    fun image(source: ImageBitmap, screen: Size, plate: Rect, radius: Float, rim: Float): ImageBitmap {
+        entry?.takeIf { it.matches(source, screen, plate, radius, rim) }?.let { return it.image }
+        return synchronized(this) {
+            entry?.takeIf { it.matches(source, screen, plate, radius, rim) }?.image ?: run {
+                val tinted = plateTinted(source)
+                val image = bakePlate(tinted, screen, plate, radius, rim)
+                Entry(source, screen, plate, radius, rim, image).also { entry = it }.image
+            }
+        }
+    }
+
+    fun trim() = synchronized(this) { entry = null }
+
+    private fun Entry.matches(source: ImageBitmap, screen: Size, plate: Rect, radius: Float, rim: Float) =
+        this.source === source && this.screen == screen && this.plate == plate && this.radius == radius && this.rim == rim
+}
+
+internal fun prewarmHomePlate(glass: ImageBitmap, screen: Size, plate: Rect, density: Float) {
+    val canvas = androidx.compose.ui.unit.Density(density)
+    HomePlateBakes.image(
+        glass,
+        screen,
+        plate,
+        with(canvas) { PlateCorner.toPx() },
+        with(canvas) { 1.2.dp.toPx() },
+    )
+}
+
+internal fun trimHomePlateCache() = HomePlateBakes.trim()
 
 /** A plate baked at its resting place, drawn stretched to [at]. */
 private fun androidx.compose.ui.graphics.drawscope.DrawScope.drawBaked(image: ImageBitmap, at: Rect, alpha: Float) = drawImage(

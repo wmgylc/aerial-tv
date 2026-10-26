@@ -55,7 +55,10 @@ import app.orchard.tv.apps.TileArtFactory
 import app.orchard.tv.guard.GuardSetup
 import app.orchard.tv.guard.HomeGuardService
 import app.orchard.tv.ui.home.HomeScreen
+import app.orchard.tv.ui.home.initialHomePlateWarmup
 import app.orchard.tv.ui.home.LiveFilm
+import app.orchard.tv.ui.home.prewarmHomePlate
+import app.orchard.tv.ui.home.trimHomePlateCache
 import app.orchard.tv.ui.home.asFocusedTile
 import app.orchard.tv.ui.theme.LocalReducedMotion
 import app.orchard.tv.ui.home.TileFaces
@@ -189,6 +192,18 @@ class MainActivity : ComponentActivity() {
         SourceLooks.init(this)
         AppNames.init(this)
         AerialSettings.init(this)
+        initialHomePlateWarmup(
+            resources.displayMetrics.widthPixels,
+            resources.displayMetrics.heightPixels,
+            canvasDensity(resources.displayMetrics),
+        )?.let { warmup ->
+            (Wallpapers.frosted ?: Wallpapers.backdrop)?.let { glass ->
+                lifecycleScope.launch(Dispatchers.Default) {
+                    prewarmHomePlate(glass, warmup.screen, warmup.plate, canvasDensity(resources.displayMetrics))
+                    DiagLog.i("Home plate prewarmed before Compose")
+                }
+            }
+        }
         Sounds.init(this)
         val reducedMotion = Settings.Global.getFloat(contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f) == 0f
 
@@ -288,6 +303,7 @@ class MainActivity : ComponentActivity() {
         DiagLog.i("trim memory, level $level")
         Wallpapers.trimMemory()
         TileFaces.trimMemory()
+        trimHomePlateCache()
     }
 
     override fun onDestroy() {
@@ -639,7 +655,6 @@ class MainActivity : ComponentActivity() {
         lifecycleScope.launch(Dispatchers.IO) { PhoneServer.listen(this@MainActivity) }
         GuardSetup.ensureEnabled(this)
         idleHandler.postDelayed({ GuardSetup.rebindIfStalled(this) }, 5_000)
-        vm.reloadIfPackagesChanged()
         ContextCompat.registerReceiver(
             this, packageReceiver,
             IntentFilter().apply {
@@ -651,6 +666,9 @@ class MainActivity : ComponentActivity() {
             },
             ContextCompat.RECEIVER_EXPORTED,
         )
+        // Listen first, then compare the package sequence. That closes the gap where an install
+        // could finish after the check but before this receiver was registered.
+        vm.reloadIfPackagesChanged()
         ContextCompat.registerReceiver(
             this, volumeReceiver,
             IntentFilter("android.media.VOLUME_CHANGED_ACTION"),
@@ -669,8 +687,8 @@ class MainActivity : ComponentActivity() {
             if (Build.VERSION.SDK_INT >= 24) cm.registerDefaultNetworkCallback(networkCallback)
             else cm.registerNetworkCallback(NetworkRequest.Builder().build(), networkCallback)
         }
-        // Apps can change while Aerial is in the background without it hearing about it.
-        vm.reload()
+        // The initial ViewModel load is already running on a cold start; inputs and other system
+        // state are refreshed by refreshSystem in onResume.
         Wallpapers.refreshDailyIfStale()
         Wallpapers.rotateIfDue()
         Weather.refreshIfStale()

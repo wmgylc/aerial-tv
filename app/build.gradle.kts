@@ -12,12 +12,12 @@ android {
     compileSdk = 36
 
     defaultConfig {
-        applicationId = "app.orchard.tv"
+        applicationId = "app.orchard.tv.xgimi"
         // Android 5.0. Compose 1.10 and later need 6.0, so the Compose BOM below stays on 1.9.
         minSdk = 21
         targetSdk = 34
         versionCode = 68
-        versionName = "1.56"
+        versionName = "1.56-xgimi-hdmi1"
         // `./gradlew -Pdiag ...`: a build for one reporter's TV whose logcat shows no app lines;
         // see system/DiagLog.kt.
         val diag = project.hasProperty("diag")
